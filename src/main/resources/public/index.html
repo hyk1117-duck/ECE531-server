@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Thermocouple Control Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<!--
+  Thermocouple Control Panel — frontend for the hw_5 NanoHTTPD + MongoDB REST API.
+  Talks to the CRUD routes under /data (PUT /data to create, GET /data to list,
+  POST /data/{id} to update). Settings are stored as plain { "label": "...", "value": "..." }
+  documents so nothing new needs to be added on the backend.
+
+  Assumptions — adjust below if your setup differs:
+   - API_BASE is same-origin by default, since Server.java serves this file itself at
+     GET / and GET /index.html, with the data API on a separate path (/data) so the
+     two never collide. Only set API_BASE to an absolute URL if you host this file
+     separately from the API (e.g. a static host on a different origin).
+   - Scheduled times live under labels "time1" / "time2" / "time3".
+   - Power state lives under label "status" with value "ON" / "OFF".
+   - Live temperature is read from any document with a "temperature" field, or
+     { "label": "temperature", "value": <number> }. Edit extractTemperature()
+     if your sensor client (tcsimd) writes a different shape.
+-->
+<style>
+  :root {
+    --bg: #15181C;
+    --panel: #1B1F23;
+    --card: #21262B;
+    --border: #33393F;
+    --text: #EDEFF2;
+    --text-muted: #8B94A0;
+    --teal: #3ED6B5;
+    --amber: #F5A623;
+    --orange: #E8542A;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      repeating-linear-gradient(180deg, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 1px, transparent 1px, transparent 3px),
+      var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    padding: 32px 20px 60px;
+  }
+
+  h1, h2 {
+    font-family: 'Oswald', sans-serif;
+    text-transform: uppercase;
+    margin: 0;
+  }
+
+  .panel {
+    max-width: 920px;
+    margin: 0 auto;
+  }
+
+  .panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 20px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .brand { display: flex; align-items: center; gap: 14px; }
+
+  .brand__mark {
+    font-family: 'Oswald', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--teal);
+    padding: 8px 12px;
+    border-radius: var(--radius);
+  }
+
+  .brand h1 {
+    font-size: 22px;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  .link-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+
+  .led {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    box-shadow: none;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  .led--on { background: var(--teal); box-shadow: 0 0 8px 1px var(--teal); }
+  .led--off { background: var(--orange); box-shadow: 0 0 8px 1px var(--orange); }
+
+  .banner {
+    background: rgba(232, 84, 42, 0.12);
+    border: 1px solid var(--orange);
+    color: #FFD9CB;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 13px;
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 20px;
+  }
+
+  @media (max-width: 760px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+  }
+
+  .card h2 {
+    font-size: 14px;
+    letter-spacing: 0.14em;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+
+  .hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0 0 20px;
+  }
+
+  .entry { margin-bottom: 18px; }
+  .entry label {
+    display: block;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .entry__row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  input[type="time"], input[type="number"] {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    padding: 9px 10px;
+    border-radius: var(--radius);
+  }
+  input[type="time"] { flex: 1 1 120px; }
+  input[type="number"] { flex: 1 1 120px; }
+  input.temp-input { flex: 0 1 84px; }
+  input[type="time"]:focus-visible, input[type="number"]:focus-visible {
+    outline: 2px solid var(--teal);
+    outline-offset: 1px;
+  }
+
+  .entry__row { flex-wrap: wrap; }
+
+  .btn {
+    background: transparent;
+    border: 1px solid var(--teal);
+    color: var(--teal);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 9px 14px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: rgba(62, 214, 181, 0.12); }
+  .btn:disabled { opacity: 0.6; cursor: default; }
+  .btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  .entry__status {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 44px;
+  }
+  .entry__status--saved { color: var(--teal); }
+
+  .entry--power { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
+
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 16px 8px 12px;
+    width: fit-content;
+    font-family: 'Oswald', sans-serif;
+  }
+
+  .status-indicator .led {
+    width: 10px;
+    height: 10px;
+  }
+
+  .status-indicator span:last-child {
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    color: var(--orange);
+    transition: color 0.25s;
+  }
+  .status-indicator .led--on ~ span:last-child { color: var(--teal); }
+
+  .card--gauge { display: flex; flex-direction: column; align-items: center; text-align: center; }
+
+  .slider-gauge { width: 100%; max-width: 320px; margin-top: 22px; }
+
+  .slider-track {
+    position: relative;
+    height: 14px;
+    border-radius: 999px;
+    margin: 0 11px;
+    background: linear-gradient(
+      90deg,
+      var(--teal) 0%, var(--teal) 58%,
+      var(--amber) 58%, var(--amber) 78%,
+      var(--orange) 78%, var(--orange) 100%
+    );
+  }
+
+  .slider-thumb {
+    position: absolute;
+    top: 50%;
+    left: 0%;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 3px solid var(--text-muted);
+    box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.3);
+    transform: translate(-50%, -50%);
+    transition: left 0.6s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.4s, box-shadow 0.4s;
+  }
+
+  .slider-scale {
+    display: flex;
+    justify-content: space-between;
+    margin: 10px 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .gauge__reading {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 40px;
+    font-weight: 700;
+    margin-top: 6px;
+    letter-spacing: 0.02em;
+  }
+  .gauge__unit { font-size: 18px; color: var(--text-muted); margin-left: 4px; }
+
+  .gauge__meta { font-size: 11px; color: var(--text-muted); margin-top: 6px; letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <header class="panel__header">
+      <div class="brand">
+        <span class="brand__mark">TC&#8209;01</span>
+        <h1>Thermocouple Control Panel</h1>
+      </div>
+      <div class="link-status">
+        <span class="led" id="linkLed"></span>
+        <span id="linkText">CONNECTING&hellip;</span>
+      </div>
+    </header>
+
+    <div class="banner" id="errorBanner" hidden></div>
+
+    <main class="grid">
+      <section class="card card--schedule">
+        <h2>Schedule</h2>
+        <p class="hint">Sample times pushed to the device.</p>
+
+        <div class="entry" data-key="time1">
+          <label for="time1">Time 1</label>
+          <div class="entry__row">
+            <input type="time" id="time1" />
+            <input type="number" step="0.1" id="temp1" class="temp-input" placeholder="&deg;F" aria-label="Target temperature for Time 1" />
+            <button class="btn" data-save="time1">Save</button>
+            <span class="entry__status" data-status="time1"></span>
+          </div>
+        </div>
+
+        <div class="entry" data-key="time2">
+          <label for="time2">Time 2</label>
+          <div class="entry__row">
+            <input type="time" id="time2" />
+            <input type="number" step="0.1" id="temp2" class="temp-input" placeholder="&deg;F" aria-label="Target temperature for Time 2" />
+            <button class="btn" data-save="time2">Save</button>
+            <span class="entry__status" data-status="time2"></span>
+          </div>
+        </div>
+
+        <div class="entry" data-key="time3">
+          <label for="time3">Time 3</label>
+          <div class="entry__row">
+            <input type="time" id="time3" />
+            <input type="number" step="0.1" id="temp3" class="temp-input" placeholder="&deg;F" aria-label="Target temperature for Time 3" />
+            <button class="btn" data-save="time3">Save</button>
+            <span class="entry__status" data-status="time3"></span>
+          </div>
+        </div>
+
+        <div class="entry entry--power">
+          <label>Status</label>
+          <div class="status-indicator" id="powerIndicator" role="status" aria-live="polite">
+            <span class="led" id="powerLed"></span>
+            <span id="powerText">OFF</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card card--gauge">
+        <h2>Temperature</h2>
+        <div class="gauge__reading"><span id="tempValue">&#45;&#45;</span><span class="gauge__unit">&deg;F</span></div>
+        <div class="slider-gauge">
+          <div class="slider-track">
+            <div class="slider-thumb" id="sliderThumb"></div>
+          </div>
+          <div class="slider-scale" id="sliderScale"></div>
+        </div>
+        <div class="gauge__meta" id="tempMeta">Awaiting sensor data&hellip;</div>
+      </section>
+    </main>
+  </div>
+
+<script>
+  // ---- configuration ----
+  const API_BASE = ""; // same-origin — Server.java now serves this file itself, so relative requests just work
+  const SCHEDULE_KEYS = ["time1", "time2", "time3"];
+  const SCHEDULE_TEMP_ID = { time1: "temp1", time2: "temp2", time3: "temp3" };
+  const GAUGE_MIN = 55, GAUGE_MAX = 90; // °F, adjust to your thermocouple's expected range
+  const POLL_MS = 3000;
+
+  const ids =     {
+                    status: "6a62f1b9a177a515fa9fcdc3",
+                    temperature: "6a62f1b9a177a515fa9fcdc4",
+                    time1: "6a62f1b9a177a515fa9fcdc5",
+                    time2: "6a62f1baa177a515fa9fcdc6",
+                    time3: "6a62f1baa177a515fa9fcdc7",
+                    };   // label -> mongo id, once known
+
+  // ---- API helpers ----
+  async function apiList() {
+    const res = await fetch(`${API_BASE}/data`);
+    if (!res.ok) throw new Error("list failed");
+    return res.json();
+  }
+  async function apiCreate(doc) {
+    const res = await fetch(`${API_BASE}/data`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(doc),
+    });
+    if (!res.ok) throw new Error("create failed");
+    return res.json();
+  }
+  async function apiUpdate(id, doc) {
+    const res = await fetch(`${API_BASE}/data/${id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(doc),
+    });
+    if (!res.ok) throw new Error("update failed");
+    return res.json();
+  }
+
+  // ---- UI helpers ----
+
+  function showError(msg) {
+    const b = document.getElementById("errorBanner");
+    if (!msg) { b.hidden = true; return; }
+    b.hidden = false;
+    b.textContent = msg;
+  }
+
+  function markSaved(key) {
+    const status = document.querySelector(`[data-status="${key}"]`);
+    if (!status) return;
+    status.textContent = "Saved";
+    status.classList.add("entry__status--saved");
+    setTimeout(() => status.classList.remove("entry__status--saved"), 1500);
+  }
+
+  // ---- load + sync ----
+  async function loadAll() {
+    try {
+      const docs = await apiList();
+      showError(null);
+
+      for (const doc of docs) {
+        if (SCHEDULE_KEYS.includes(doc.label)) {
+          ids[doc.label] = doc.id;
+          const timeInput = document.getElementById(doc.label);
+          const tempInput = document.getElementById(SCHEDULE_TEMP_ID[doc.label]);
+          if (timeInput && doc.time !== undefined && document.activeElement !== timeInput) timeInput.value = doc.time;
+          if (tempInput && doc.temperature !== undefined && document.activeElement !== tempInput) tempInput.value = doc.temperature;
+        }
+        if (doc.label === "temperature") {
+          ids.temperature = doc.id;
+        }
+        if (doc.label === "status") {
+          ids.status = doc.id;
+          updatePowerDisplay(doc.value === "ON");
+        }
+      }
+      updateTemperature(docs);
+      await ensureSeeded();
+    } catch (e) {
+      showError(`Can't reach thermostat. Check the connection.`);
+    }
+  }
+
+  // Creates default documents for power/temperature the first time they're
+  // missing, so both live in the database right away instead of only after
+  // a manual save or the sensor's first write.
+  async function ensureSeeded() {
+    try {
+      if (!ids.status) {
+        const created = await apiCreate({ label: "status", value: "OFF" });
+        ids.status = created.id;
+      }
+      if (!ids.temperature) {
+        const created = await apiCreate({ label: "temperature", value: 0 });
+        ids.temperature = created.id;
+      }
+      if (!ids.time1) {
+        const created = await apiCreate({temperature: 80, label: "time1", time: "00:00" });
+        ids.time1 = created.id;
+      }
+      if (!ids.time2) {
+        const created = await apiCreate({temperature: 80, label: "time2", time: "00:00" });
+        ids.time2 = created.id;
+      }
+      if (!ids.time3) {
+        const created = await apiCreate({temperature: 80, label: "time3", time: "00:00" });
+        ids.time3 = created.id;
+      }
+    } catch (e) {
+      // will retry on the next poll
+    }
+  }
+
+  // Saves a scheduled slot's time together with its target temperature in one document.
+  async function saveSchedule(key) {
+    const timeInput = document.getElementById(key);
+    const tempInput = document.getElementById(SCHEDULE_TEMP_ID[key]);
+    const time = timeInput.value;
+    const temperature = tempInput.value === "" ? null : Number(tempInput.value);
+    if (!time && temperature === null) return;
+    const btn = document.querySelector(`[data-save="${key}"]`);
+    btn.disabled = true;
+    btn.textContent = "Saving\u2026";
+    try {
+      const doc = { label: key, time, temperature };
+      if (ids[key]) {
+        await apiUpdate(ids[key], doc);
+      } else {
+        const created = await apiCreate(doc);
+        ids[key] = created.id;
+      }
+      markSaved(key);
+      setLink(true);
+      showError(null);
+    } catch (e) {
+      setLink(false);
+      showError(`Couldn't save ${key}. Check the connection.`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Save";
+    }
+  }
+
+  // Reflects the status document's value; the UI no longer writes this field.
+  function updatePowerDisplay(on) {
+    const led = document.getElementById("powerLed");
+    const text = document.getElementById("powerText");
+    led.classList.toggle("led--on", on);
+    led.classList.toggle("led--off", !on);
+    text.textContent = on ? "ON" : "OFF";
+  }
+
+  // ---- temperature gauge ----
+  function extractTemperature(docs) {
+    for (const doc of docs) {
+      if (doc.label === "temperature" && doc.value !== undefined) return Number(doc.value);
+    }
+    return null;
+  }
+
+  function updateTemperature(docs) {
+    const t = extractTemperature(docs);
+    const meta = document.getElementById("tempMeta");
+    if (t === null || Number.isNaN(t)) {
+      document.getElementById("tempValue").textContent = "--";
+      meta.textContent = "Awaiting sensor data\u2026";
+      setSliderIdle();
+      return;
+    }
+    document.getElementById("tempValue").textContent = t.toFixed(1);
+    meta.textContent = "Updated " + new Date().toLocaleTimeString();
+    setSliderPosition(t);
+  }
+
+  function setSliderPosition(t) {
+    const clamped = Math.max(GAUGE_MIN, Math.min(GAUGE_MAX, t));
+    const frac = (clamped - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN);
+    const thumb = document.getElementById("sliderThumb");
+    let zoneColor = "var(--teal)";
+    if (frac >= 0.78) zoneColor = "var(--orange)";
+    else if (frac >= 0.58) zoneColor = "var(--amber)";
+    thumb.style.left = `${frac * 100}%`;
+    thumb.style.borderColor = zoneColor;
+    thumb.style.boxShadow = `0 0 0 4px rgba(0, 0, 0, 0.3), 0 0 10px 2px ${zoneColor}`;
+  }
+
+  function setSliderIdle() {
+    const thumb = document.getElementById("sliderThumb");
+    thumb.style.left = "0%";
+    thumb.style.borderColor = "var(--text-muted)";
+    thumb.style.boxShadow = "0 0 0 4px rgba(0, 0, 0, 0.3)";
+  }
+
+  function buildScale() {
+    const layer = document.getElementById("sliderScale");
+    const steps = 5;
+    for (let i = 0; i <= steps; i++) {
+      const value = GAUGE_MIN + (i / steps) * (GAUGE_MAX - GAUGE_MIN);
+      const span = document.createElement("span");
+      span.textContent = Math.round(value);
+      layer.appendChild(span);
+    }
+  }
+
+  // ---- wire up ----
+  document.addEventListener("DOMContentLoaded", () => {
+    buildScale();
+    setSliderIdle();
+
+    document.querySelectorAll("[data-save]").forEach((btn) => {
+      btn.addEventListener("click", () => saveSchedule(btn.dataset.save));
+    });
+
+    loadAll();
+    setInterval(loadAll, POLL_MS);
+  });
+</script>
+</body>
+</html>

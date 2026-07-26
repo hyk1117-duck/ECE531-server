@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-sudo systemctl stop hw5-server
+sudo systemctl stop fp-server
 sudo systemctl stop mongod
 sleep 15
-sudo systemctl stop hw5-server
-sudo systemctl stop mongod
+sudo systemctl status fp-server
+sudo systemctl status mongod

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-sudo systemctl start hw5-server
+sudo systemctl start fp-server
 sudo systemctl start mongod
 sleep 15
-sudo systemctl status hw5-server
+sudo systemctl status fp-server
 sudo systemctl status mongod

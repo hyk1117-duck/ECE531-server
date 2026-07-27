@@ -62,47 +62,6 @@
     margin: 0 auto;
   }
 
-  .panel__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding-bottom: 20px;
-    margin-bottom: 24px;
-    border-bottom: 1px solid var(--border);
-    flex-wrap: wrap;
-  }
-
-  .brand { display: flex; align-items: center; gap: 14px; }
-
-  .brand__mark {
-    font-family: 'Oswald', sans-serif;
-    font-weight: 700;
-    font-size: 15px;
-    letter-spacing: 0.08em;
-    background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--teal);
-    padding: 8px 12px;
-    border-radius: var(--radius);
-  }
-
-  .brand h1 {
-    font-size: 22px;
-    letter-spacing: 0.04em;
-    font-weight: 600;
-  }
-
-  .link-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    letter-spacing: 0.1em;
-    color: var(--text-muted);
-    text-transform: uppercase;
-  }
-
   .led {
     width: 9px;
     height: 9px;
@@ -113,17 +72,6 @@
   }
   .led--on { background: var(--teal); box-shadow: 0 0 8px 1px var(--teal); }
   .led--off { background: var(--orange); box-shadow: 0 0 8px 1px var(--orange); }
-
-  .banner {
-    background: rgba(232, 84, 42, 0.12);
-    border: 1px solid var(--orange);
-    color: #FFD9CB;
-    border-radius: var(--radius);
-    padding: 12px 16px;
-    font-size: 13px;
-    margin-bottom: 20px;
-    line-height: 1.5;
-  }
 
   .grid {
     display: grid;
@@ -149,65 +97,6 @@
     margin-bottom: 4px;
   }
 
-  .switch {
-    position: relative;
-    display: inline-block;
-    width: 42px;
-    height: 24px;
-    flex: 0 0 auto;
-  }
-  .switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-  .switch__track {
-    position: absolute;
-    cursor: pointer;
-    inset: 0;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    transition: background 0.2s, border-color 0.2s;
-  }
-  .switch__track::before {
-    content: "";
-    position: absolute;
-    height: 16px;
-    width: 16px;
-    left: 3px;
-    top: 3px;
-    background: var(--text-muted);
-    border-radius: 50%;
-    transition: transform 0.2s, background 0.2s;
-  }
-  .switch input:checked + .switch__track {
-    background: rgba(62, 214, 181, 0.15);
-    border-color: var(--teal);
-  }
-  .switch input:checked + .switch__track::before {
-    transform: translateX(18px);
-    background: var(--teal);
-  }
-  .switch input:focus-visible + .switch__track {
-    outline: 2px solid var(--teal);
-    outline-offset: 2px;
-  }
-
-  .entry--override {
-    width: 100%;
-    max-width: 320px;
-    margin-top: 26px;
-    padding-top: 18px;
-    border-top: 1px solid var(--border);
-    text-align: left;
-  }
-
-  /* Visually locks the schedule while a static override is active */
-  .schedule--disabled {
-    opacity: 0.45;
-    pointer-events: none;
-  }
   .hint {
     font-size: 12px;
     color: var(--text-muted);
@@ -356,19 +245,6 @@
 </head>
 <body>
   <div class="panel">
-    <header class="panel__header">
-      <div class="brand">
-        <span class="brand__mark">TC&#8209;01</span>
-        <h1>Thermocouple Control Panel</h1>
-      </div>
-      <div class="link-status">
-        <span class="led" id="linkLed"></span>
-        <span id="linkText">CONNECTING&hellip;</span>
-      </div>
-    </header>
-
-    <div class="banner" id="errorBanner" hidden></div>
-
     <main class="grid">
       <section class="card card--schedule">
         <h2>Schedule</h2>
@@ -471,13 +347,6 @@
 
   // ---- UI helpers ----
 
-  function showError(msg) {
-    const b = document.getElementById("errorBanner");
-    if (!msg) { b.hidden = true; return; }
-    b.hidden = false;
-    b.textContent = msg;
-  }
-
   function markSaved(key) {
     const status = document.querySelector(`[data-status="${key}"]`);
     if (!status) return;
@@ -490,7 +359,6 @@
   async function loadAll() {
     try {
       const docs = await apiList();
-      showError(null);
 
       for (const doc of docs) {
         if (SCHEDULE_KEYS.includes(doc.label)) {
@@ -511,12 +379,12 @@
       updateTemperature(docs);
       await ensureSeeded();
     } catch (e) {
-      showError(`Can't reach thermostat. Check the connection.`);
+      // will retry on the next poll
     }
   }
 
   // Creates default documents for power/temperature the first time they're
-  // missing, so both live in the database right away instead of only after
+  // missing, so they live in the database right away instead of only after
   // a manual save or the sensor's first write.
   async function ensureSeeded() {
     try {
@@ -564,11 +432,8 @@
         ids[key] = created.id;
       }
       markSaved(key);
-      setLink(true);
-      showError(null);
     } catch (e) {
-      setLink(false);
-      showError(`Couldn't save ${key}. Check the connection.`);
+      // save failed silently; user can retry
     } finally {
       btn.disabled = false;
       btn.textContent = "Save";
@@ -642,7 +507,8 @@
     setSliderIdle();
 
     document.querySelectorAll("[data-save]").forEach((btn) => {
-      btn.addEventListener("click", () => saveSchedule(btn.dataset.save));
+      const key = btn.dataset.save;
+      btn.addEventListener("click", () => saveSchedule(key));
     });
 
     loadAll();

@@ -12,17 +12,6 @@
   Talks to the CRUD routes under /data (PUT /data to create, GET /data to list,
   POST /data/{id} to update). Settings are stored as plain { "label": "...", "value": "..." }
   documents so nothing new needs to be added on the backend.
-
-  Assumptions — adjust below if your setup differs:
-   - API_BASE is same-origin by default, since Server.java serves this file itself at
-     GET / and GET /index.html, with the data API on a separate path (/data) so the
-     two never collide. Only set API_BASE to an absolute URL if you host this file
-     separately from the API (e.g. a static host on a different origin).
-   - Scheduled times live under labels "time1" / "time2" / "time3".
-   - Power state lives under label "status" with value "ON" / "OFF".
-   - Live temperature is read from any document with a "temperature" field, or
-     { "label": "temperature", "value": <number> }. Edit extractTemperature()
-     if your sensor client (tcsimd) writes a different shape.
 -->
 <style>
   :root {
